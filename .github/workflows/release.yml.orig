@@ -1,0 +1,222 @@
+name: release
+
+on:
+  push:
+
+env:
+  CACHE_VERSION: 5
+  DEBIAN_FRONTEND: noninteractive
+  PAWPAW_SKIP_LTO: 1
+
+jobs:
+  # macOS native intel build
+  macos:
+    runs-on: macos-10.15
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+    - name: Set up cache
+      uses: actions/cache@v3
+      id: cache
+      with:
+        path: |
+          ~/PawPawBuilds
+        key: macos-v${{ env.CACHE_VERSION }}
+    - name: Set up dependencies
+      run: |
+        brew install cmake jq meson
+    - name: Bootstrap macOS intel
+      shell: bash
+      run: |
+        ./PawPaw/bootstrap-jack2.sh macos && ./PawPaw/bootstrap-qt.sh macos && ./PawPaw/.cleanup.sh macos
+    - name: Build macOS intel
+      shell: bash
+      if: steps.cache.outputs.cache-hit == 'true'
+      run: |
+        ./pack-jack2-version.sh macos
+    - name: Set sha8
+      id: slug
+      run: echo "::set-output name=sha8::$(echo ${{ github.sha }} | cut -c1-8)"
+    - uses: actions/upload-artifact@v3
+      with:
+        name: jack2-macOS-intel-${{ github.event.pull_request.number || steps.slug.outputs.sha8 }}
+        path: PawPaw/jack2-macOS-*.tar.gz
+    - uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        files: |
+          path: PawPaw/jack2-macOS-*.tar.gz
+
+  # macOS native universal build
+  macos_universal:
+    runs-on: macos-10.15
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+    - name: Set up cache
+      uses: actions/cache@v3
+      id: cache
+      with:
+        path: |
+          ~/PawPawBuilds
+        key: macos-universal-v${{ env.CACHE_VERSION }}
+    - name: Set up dependencies
+      run: |
+        brew install cmake jq meson
+    - name: Fix up Xcode
+      run: |
+        sudo rm -Rf /Library/Developer/CommandLineTools/SDKs/*
+        sudo xcode-select -s "/Applications/Xcode_12.3.app"
+    - name: Bootstrap macOS universal
+      shell: bash
+      run: |
+        ./PawPaw/bootstrap-jack2.sh macos-universal && ./PawPaw/bootstrap-qt.sh macos-universal && ./PawPaw/.cleanup.sh macos-universal
+    - name: Build macOS universal
+      shell: bash
+      if: steps.cache.outputs.cache-hit == 'true'
+      run: |
+        ./pack-jack2-version.sh macos-universal
+    - name: Set sha8
+      id: slug
+      run: echo "::set-output name=sha8::$(echo ${{ github.sha }} | cut -c1-8)"
+    - uses: actions/upload-artifact@v3
+      with:
+        name: jack2-macOS-universal-${{ github.event.pull_request.number || steps.slug.outputs.sha8 }}
+        path: PawPaw/jack2-macOS-*.tar.gz
+    - uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        files: |
+          path: PawPaw/jack2-macOS-*.tar.gz
+
+  # linux with win32 cross-compilation
+  win32:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+    - name: Set up cache
+      uses: actions/cache@v3
+      id: cache
+      with:
+        path: |
+          ~/PawPawBuilds
+        key: win32-v${{ env.CACHE_VERSION }}
+    - name: Restore debian packages cache
+      run: |
+        if [ -d ~/PawPawBuilds/debs ] && [ "$(ls ~/PawPawBuilds/debs | wc -l)" -ne 0 ]; then \
+          sudo cp ~/PawPawBuilds/debs/*.deb /var/cache/apt/archives/; \
+        fi
+    - name: Fix GitHub's mess
+      run: |
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+        sudo apt-get update -qq
+        sudo apt-get install -yqq --allow-downgrades libgd3/jammy
+        sudo apt-get purge -yqq libmono* moby* mono* msbuild* php* libgdiplus libpcre2-posix3 nuget
+    - name: Set up dependencies
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update -qq
+        sudo apt-get install -y autopoint build-essential curl cmake jq llvm meson mingw-w64 qttools5-dev qttools5-dev-tools xvfb \
+          binutils-mingw-w64-i686 g++-mingw-w64-i686 mingw-w64 wine-stable:i386
+    - name: Cache debian packages
+      run: |
+        mkdir -p ~/PawPawBuilds/debs
+        sudo mv /var/cache/apt/archives/*.deb ~/PawPawBuilds/debs/
+    - name: Bootstrap win32 cross-compiled
+      shell: bash
+      run: |
+        ./PawPaw/bootstrap-jack2.sh win32 && ./PawPaw/bootstrap-qt.sh win32 && ./PawPaw/.cleanup.sh win32
+    - name: Build win32 cross-compiled
+      shell: bash
+      if: steps.cache.outputs.cache-hit == 'true'
+      run: |
+        xvfb-run ./pack-jack2-version.sh win32
+    - name: Set sha8
+      id: slug
+      run: echo "::set-output name=sha8::$(echo ${{ github.sha }} | cut -c1-8)"
+    - uses: actions/upload-artifact@v3
+      with:
+        name: jack2-win32-${{ github.event.pull_request.number || steps.slug.outputs.sha8 }}
+        path: PawPaw/jack2-win*.exe
+    - uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        files: |
+          path: PawPaw/jack2-win*.exe
+
+  # linux with win64 cross-compilation
+  win64:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+    - name: Set up cache
+      uses: actions/cache@v3
+      id: cache
+      with:
+        path: |
+          ~/PawPawBuilds
+        key: win64-v${{ env.CACHE_VERSION }}
+    - name: Restore debian packages cache
+      run: |
+        if [ -d ~/PawPawBuilds/debs ] && [ "$(ls ~/PawPawBuilds/debs | wc -l)" -ne 0 ]; then \
+          sudo cp ~/PawPawBuilds/debs/*.deb /var/cache/apt/archives/; \
+        fi
+    - name: Fix GitHub's mess
+      run: |
+        sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list
+        sudo apt-get update -qq
+        sudo apt-get install -yqq --allow-downgrades libgd3/jammy
+        sudo apt-get purge -yqq libmono* moby* mono* msbuild* php* libgdiplus libpcre2-posix3 nuget
+    - name: Set up dependencies
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update -qq
+        sudo apt-get install -y autopoint build-essential curl cmake jq llvm meson mingw-w64 qttools5-dev qttools5-dev-tools xvfb \
+          binutils-mingw-w64-x86-64 g++-mingw-w64-x86-64 mingw-w64 wine-stable
+    - name: Cache debian packages
+      run: |
+        mkdir -p ~/PawPawBuilds/debs
+        sudo mv /var/cache/apt/archives/*.deb ~/PawPawBuilds/debs/
+    - name: Bootstrap win64 cross-compiled
+      shell: bash
+      run: |
+        ./PawPaw/bootstrap-jack2.sh win64 && ./PawPaw/bootstrap-qt.sh win64 && ./PawPaw/.cleanup.sh win64
+    - name: Build win64 cross-compiled
+      shell: bash
+      if: steps.cache.outputs.cache-hit == 'true'
+      run: |
+        xvfb-run ./pack-jack2-version.sh win64
+    - name: Set sha8
+      id: slug
+      run: echo "::set-output name=sha8::$(echo ${{ github.sha }} | cut -c1-8)"
+    - uses: actions/upload-artifact@v3
+      with:
+        name: jack2-win64-${{ github.event.pull_request.number || steps.slug.outputs.sha8 }}
+        path: PawPaw/jack2-win*.exe
+    - uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        files: |
+          path: PawPaw/jack2-win*.exe
